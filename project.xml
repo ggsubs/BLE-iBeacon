@@ -4,4 +4,6 @@
 	<hardware in="hardware.xml" />
 	<script in="script.bgs" />
 	<image out="image.hex" />
+    <config in="config.xml" />
+    <usb_main in="cdc.xml" />
 </project>

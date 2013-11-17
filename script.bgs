@@ -1,50 +1,127 @@
-dim cmd_counter
-dim rx_counter
-dim string(5)
-dim is_on
+dim data( 30 )
+dim result
+dim port
+dim read_data
+
+dim cdc_result      # USB CDC RX data operation return code
+dim cdc_data_size   # USB CDC RX data size
+dim cdc_data        # USB CDC RX data value
 
 event system_boot( major, minor, patch, build, ll_version, protocol_version, hw )
 
+	# enable watermark event on UART endpoint (REQUIRED for USB CDC-based DFU trigger)
+	call system_endpoint_set_watermarks(3, 1, 0)
+
 	# Set advertisement interval to 100 to 500ms. Use all advertisement channels
-	call gap_set_adv_parameters( 20, 100, 7 )
+	call gap_set_adv_parameters( $200, $200, 7 )
 	
 	#set to advertising mode
 	call gap_set_mode( gap_general_discoverable, gap_undirected_connectable )
+	
+	# Initialize iBeacon advertisement data
+	# Flags = LE General Discovery, single mode device (02 01 06)
+	# UUID for Apple's AirLocate app = 83256b74-78d0-43a4-8269-05f9dc8a44ba
+	# UUID for JWJ custom app =        1ACBAD6E-E1A5-4838-A62A-22D35D00C35B
+	# Major = 00 <value of DIP> defaults to 3F (P0_0 through P0_5 are pulled up)
+	# Minor = 00 01
+	# Measured power = -58 ($c6)
+	
+	# Results: SNIFFED DATA STARTS
+	# Length: 47
+	# Raw data (hex): D6 BE 89 8E 00 24 CC 6D 71 80 07 00 02 01 06 1A FF 4C 00 02 15 83 25 6B 74 78 D0 43 A4 82 69 05 F9 DC 8A 44 BA 00 3F 00 01 C6 26 E5 98 40 A7
+	# END SNIFFED DATA
+
+	# Flags
+	data( 0:1) = $02
+	data( 1:1) = $01
+	data( 2:1) = $1a
+	
+	# Manufacturer data
+	data( 3:1) = $1a
+	data( 4:1) = $ff
+	
+	# Preamble
+	data( 5:1) = $4c
+	data( 6:1) = $00
+	data( 7:1) = $02
+	data( 8:1) = $15
+	
+	# UUID
+	# 1A CB AD 6E-E1 A5-48 38-A6 2A-22 D3 5D 00 C3 5B
+	# 83 25 6b 74-78 d0-43 a4-82 69-05 f9 dc 8a 44 ba
+	data( 9:1) = $e2
+	data(10:1) = $c5
+	data(11:1) = $6d
+	data(12:1) = $b5
+	data(13:1) = $df
+	data(14:1) = $fb
+	data(15:1) = $48
+	data(16:1) = $d2
+	data(17:1) = $b0
+	data(18:1) = $60
+	data(19:1) = $d0
+	data(20:1) = $f5
+	data(21:1) = $a7
+	data(22:1) = $10
+	data(23:1) = $96
+	data(24:1) = $e0
+	
+	
+	# Major – read number from DIP switch attached to pins P0_0 through P0_5.
+	# You could also just set bytes 25 and 26 to the desired major value directly.
+	# MSB is always 0
+	data(25:1) = $0c
+	
+	# Read P0_0 through P0_5 into read_data
+	#call hardware_io_port_read( 0, $3F)(result, port, read_data)
+	#data(26:1) = read_data
+	#On BLD112 it's fixed
+	data(26:1) = $1f       #HEx 0C1F
+	
+	
+	# Minor
+	data(27:1) = $00
+	
+	#Change this as dongle instance
+	data(28:1) = $04    
+
+	
+	# Measured power (specified in 2's complement, so 0xC6 is -58)
+	data(29:1) = $c6
+
+	# Set advertisement data
+	call gap_set_adv_data(0, 30, data(0:30))
 
 	#set bondable mode
-	call sm_set_bondable_mode(1)
-	
-	# Set response attribute to initial value
-	cmd_counter = 0
-	rx_counter = 0
-end
-
-# Attribute changed
-event attributes_value( connection, reason, handle, offset, value_len, value )
-	if handle = xgatt_command then
-		# Echo atribute (i.e. command) to serial
-		call system_endpoint_tx( system_endpoint_uart0, 5, value(0:5) )
-		call system_endpoint_tx( system_endpoint_uart0, 1, "\n" )
-	end if
-end
-
-event connection_status(connection, flags, address, address_type, conn_interval, timeout, latency, bonding)
-	# Connected: send message over USART
-	call system_endpoint_tx( system_endpoint_uart0, 2, "C\n" )
-	
-	cmd_counter = 0
-	rx_counter = 0
+#	call sm_set_bondable_mode(1)
 end
 
 # Disconnection event listener
 event connection_disconnected(handle, result)
-	# Disconnected: send message to MCU
-	call system_endpoint_tx( system_endpoint_uart0, 2, "D\n" )
-	
+	# Reset connection parametesr
     call gap_set_mode( gap_general_discoverable, gap_undirected_connectable )
 	call gap_set_adv_parameters( 20, 100, 7 )
+end
 
-	# Reset counters
-	cmd_counter = 0
-	rx_counter = 0
+# watch for new data from USB CDC
+# NOTE! This function or something similar MUST remain in the BGScript to
+# allow access to DFU mode over USB CDC with a special trigger character
+event system_endpoint_watermark_rx(endpoint, cdc_data_len)
+    call system_endpoint_rx(endpoint, cdc_data_len)(cdc_result, cdc_data_size, cdc_data)
+    if cdc_data = $30 then # ASCII '0' is 0x30
+        # reboot into DFU mode when 0x30 is received
+        call system_reset(1)
+    end if
+end
+
+# catch remote write of characteristic value
+# NOTE! This function or something similar MUST remain in the BGScript to
+# allow access to DFU mode by triggering from a characteristic value update
+event attributes_value(connection, reason, handle, offset, value_len, value_data)
+    if handle = c_dfu_reboot_trigger then
+        # remote client requested DFU reboot
+        # NOTE: this will reset on ANY written value. You can check for a specific
+        # byte or set of bytes in the "value_data" argument if desired.
+        call system_reset(1)
+    end if
 end
