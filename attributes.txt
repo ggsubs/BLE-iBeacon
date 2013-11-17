@@ -1,2 +1,1 @@
-xgatt_command 24
-xgatt_response 26
+c_dfu_reboot_trigger 21
