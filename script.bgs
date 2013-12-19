@@ -97,7 +97,7 @@ event system_boot( major, minor, patch, build, ll_version, protocol_version, hw 
 end
 
 # Disconnection event listener
-event connection_disconnected(handle, result)
+event connection_disconnected(handle, res)
 	# Reset connection parametesr
     call gap_set_mode( gap_general_discoverable, gap_undirected_connectable )
 	call gap_set_adv_parameters( 20, 100, 7 )
